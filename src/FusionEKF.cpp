@@ -52,9 +52,12 @@ FusionEKF::FusionEKF() {
       		   0, 1, 0, 1,
       		   0, 0, 1, 0,
       		   0, 0, 0, 1;
-
+           
+  
 }
-
+ // noise parameters
+float noise_ax = 9.0;
+float noise_ay = 9.0; 
 /**
 * Destructor.
 */
@@ -110,17 +113,19 @@ void FusionEKF::ProcessMeasurement(const MeasurementPackage &measurement_pack) {
   float dt_2 = dt * dt;
   float dt_3 = dt_2 * dt;
   float dt_4 = dt_3 * dt;
-  float noise_ax = 9.0;
-  float noise_ay = 9.0;
+ 
+  
   ekf_.Q_ = MatrixXd(4, 4);
   ekf_.Q_ <<  dt_4/4*noise_ax, 0, dt_3/2*noise_ax, 0,
     			   0, dt_4/4*noise_ay, 0, dt_3/2*noise_ay,
     			   dt_3/2*noise_ax, 0, dt_2*noise_ax, 0,
     			   0, dt_3/2*noise_ay, 0, dt_2*noise_ay;
-
-
+  //predict only for time steps greater than 0.0001
+  //if (dt>0.0001){
+  // ekf_.Predict();
+  //}
+  
   ekf_.Predict();
-
   /*****************************************************************************
    *  Update
    ****************************************************************************/
@@ -131,6 +136,7 @@ void FusionEKF::ProcessMeasurement(const MeasurementPackage &measurement_pack) {
     Tools tools; //tools object 
 	  ekf_.H_ = tools.CalculateJacobian(ekf_.x_); // calculating Jacobian matrix
 	  ekf_.R_ = R_radar_; 
+    ekf_.UpdateEKF(measurement_pack.raw_measurements_);
   } else {
     // Laser updates
     ekf_.H_ = H_laser_;
