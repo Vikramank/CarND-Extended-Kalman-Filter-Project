@@ -1,75 +1,150 @@
-#include <iostream>
+#include "FusionEKF.h"
 #include "tools.h"
+#include "Eigen/Dense"
+#include <iostream>
 
-using std::cout;
-using std::endl;
-
-using Eigen::VectorXd;
+using namespace std;
 using Eigen::MatrixXd;
+using Eigen::VectorXd;
 using std::vector;
 
-Tools::Tools() {}
+/*
+ * Constructor.
+ */
+FusionEKF::FusionEKF() {
+  is_initialized_ = false;
 
-Tools::~Tools() {}
+  previous_timestamp_ = 0;
 
-VectorXd Tools::CalculateRMSE(const vector<VectorXd> &estimations,
-                              const vector<VectorXd> &ground_truth) {
-  //intialising RMSE variable
-  VectorXd rmse(4);
-	rmse << 0,0,0,0;
-  //verifying the shape of estimate and ground truth 
-  if(estimations.size() != ground_truth.size()
-				|| estimations.size() == 0){
-			cout << "Invalid estimation or ground_truth data" << endl;
-			return rmse;
-		}
+  // initializing matrices
+  R_laser_ = MatrixXd(2, 2);
+  R_radar_ = MatrixXd(3, 3);
+  H_laser_ = MatrixXd(2, 4);
+  Hj_ = MatrixXd(3, 4);
 
-	//accumulate squared residuals
-		for(unsigned int i=0; i < estimations.size(); ++i){
+  //measurement covariance matrix - laser
+  R_laser_ << 0.0225, 0,
+              0, 0.0225;
 
-			VectorXd residual = estimations[i] - ground_truth[i];
+  //measurement covariance matrix - radar
+  R_radar_ << 0.09, 0, 0,
+              0, 0.0009, 0,
+              0, 0, 0.09;
 
-		//coefficient-wise multiplication, i.e to calculate sum of squares 
-			residual = residual.array()*residual.array();
-			rmse += residual;
-		}
 
-		//calculate the mean
-		rmse = rmse/estimations.size();
+ H_laser_ << 1, 0, 0, 0,
+  			     0, 1, 0, 0;
+  //Jacobian matrix
+  Hj_ << 1, 1, 0, 0,
+         1, 1, 0, 0,
+         1, 1, 1, 1; 
 
-		//calculate the squared root
-		rmse = rmse.array().sqrt();
+  //covariance matrix
+   ekf_.P_ = MatrixXd(4, 4);
+   ekf_.P_ << 1, 0, 0, 0,
+      		   0, 1, 0, 0,
+      		   0, 0, 1000, 0,
+      		   0, 0, 0, 1000;
 
-		//return the result
-		return rmse;
+   // F matrix
+   ekf_.F_ = MatrixXd(4, 4);
+   ekf_.F_ << 1, 0, 1, 0,
+      		   0, 1, 0, 1,
+      		   0, 0, 1, 0,
+      		   0, 0, 0, 1;
+           
+  
 }
+// noise parameters
+float noise_ax = 9.0;
+float noise_ay = 9.0; 
+/**
+* Destructor.
+*/
+FusionEKF::~FusionEKF() {}
 
-MatrixXd Tools::CalculateJacobian(const VectorXd& x_state) {
-MatrixXd Hj(3,4);
-Hj.fill(0.0); 
-	//recover state parameters
-	float px = x_state(0);
-	float py = x_state(1);
-	float vx = x_state(2);
-	float vy = x_state(3);
-
-	//pre-compute a set of terms to avoid repeated calculation
-	float c1 = px*px+py*py;
-	float c2 = sqrt(c1);
-	float c3 = (c1*c2);
-
-	//check division by zero
-	if(fabs(c1) < 0.0001){
-		cout << "CalculateJacobian () - Error - Division by Zero" << endl;
-		return Hj;
-	}
-
-	//compute the Jacobian matrix
-	Hj << (px/c2), (py/c2), 0, 0,
-		  -(py/c1), (px/c1), 0, 0,
-		  py*(vx*py - vy*px)/c3, px*(px*vy - py*vx)/c3, px/c2, py/c2;
-
-	return Hj;
+void FusionEKF::ProcessMeasurement(const MeasurementPackage &measurement_pack) {
 
 
+  /*****************************************************************************
+   *  Initialization
+   ****************************************************************************/
+  if (!is_initialized_) {
+    // first measurement
+    cout << "EKF: " << endl;
+    ekf_.x_ = VectorXd(4);
+    ekf_.x_ << 1, 1, 1, 1;
+
+    if (measurement_pack.sensor_type_ == MeasurementPackage::RADAR) {
+      /**
+      Convert radar from polar to cartesian coordinates and initialize state.
+      */
+      float ro = measurement_pack.raw_measurements_[0];
+    	float phi = measurement_pack.raw_measurements_[1];
+    	float ro_dot = measurement_pack.raw_measurements_[2];
+    	//ekf_.x_ << ro*cos(phi),ro * sin(phi), ro_dot * cos(phi), ro_dot * sin(phi);
+      ekf_.x_ << ro*cos(phi),ro * sin(phi), 0.0 , 0.0;
+    }
+    else if (measurement_pack.sensor_type_ == MeasurementPackage::LASER) {
+      /**
+      Initialize state.
+      */
+      ekf_.x_ << measurement_pack.raw_measurements_[0],measurement_pack.raw_measurements_[1],0.0,0.0;
+    }
+
+    previous_timestamp_ = measurement_pack.timestamp_;
+    // done initializing, no need to predict or update
+    is_initialized_ = true;
+    return;
+  }
+
+  /*****************************************************************************
+   *  Prediction
+   ****************************************************************************/
+
+
+  float dt = (measurement_pack.timestamp_ - previous_timestamp_) / 1000000.0;
+  previous_timestamp_ = measurement_pack.timestamp_;
+
+  ekf_.F_(0, 2) = dt;
+  ekf_.F_(1, 3) = dt;
+
+  //process noise matrix
+  float dt_2 = dt * dt;
+  float dt_3 = dt_2 * dt;
+  float dt_4 = dt_3 * dt;
+  
+ 
+  ekf_.Q_ = MatrixXd(4, 4);
+  ekf_.Q_ <<  dt_4/4*noise_ax, 0, dt_3/2*noise_ax, 0,
+    			   0, dt_4/4*noise_ay, 0, dt_3/2*noise_ay,
+    			   dt_3/2*noise_ax, 0, dt_2*noise_ax, 0,
+    			   0, dt_3/2*noise_ay, 0, dt_2*noise_ay;
+  //predict only for time steps greater than 0.0001
+  if (dt>0.0001){
+  // ekf_.Predict();
+  //}
+  
+  ekf_.Predict();
+  /*****************************************************************************
+   *  Update
+   ****************************************************************************/
+
+
+  if (measurement_pack.sensor_type_ == MeasurementPackage::RADAR) {
+    // Radar updates
+    Tools tools; //tools object 
+	  ekf_.H_ = tools.CalculateJacobian(ekf_.x_); // calculating Jacobian matrix
+	  ekf_.R_ = R_radar_; 
+    ekf_.UpdateEKF(measurement_pack.raw_measurements_);
+  } else {
+    // Laser updates
+    ekf_.H_ = H_laser_;
+	  ekf_.R_ = R_laser_;
+	  ekf_.Update(measurement_pack.raw_measurements_);
+  }
+
+  // print the output
+  cout << "x_ = " << ekf_.x_ << endl;
+  cout << "P_ = " << ekf_.P_ << endl;
 }
