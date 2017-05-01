@@ -1,5 +1,5 @@
 #include "kalman_filter.h"
-
+#include <math.h>
 using Eigen::MatrixXd;
 using Eigen::VectorXd;
 
@@ -51,21 +51,38 @@ void KalmanFilter::UpdateEKF(const VectorXd &z) {
 	// update function for Extendend Kalman filter  
     // polar coordinates 
 		float rho = sqrt(x_(0)*x_(0) + x_(1)*x_(1));
-	  float phi = atan2(x_(1), x_(0));
+		float phi = 0.0; //for low values of x, setting phi to be the default value 
+    if (fabs(x_[0]) > 0.0001) {
+           phi = atan2(x_[1], x_[0]);
+    }
+	
+
 		float rho_dot;// radial velocity
 	  // check for non-zero division
-		if (fabs(rho) < 0.0001) {
-	    rho_dot = 0;
-	  } else {
+    if (fabs(rho) < 0.0001) {
+	    rho_dot = 0.0;
+
+	  } 
+     else {
 	    rho_dot = (x_(0)*x_(2) + x_(1)*x_(3))/rho;
 	  }
+
 	  VectorXd z_pred(3); // measurement vector from sensor 
 	  z_pred << rho, phi, rho_dot;
 	  VectorXd y = z - z_pred;
+		  // normalising value of phi in the range -pi to +pi 
+         if (y(1)>M_PI)	
+          {
+             y(1) -= 2 * M_PI;
+          }
+	else if (y(1)<-M_PI)
+			{
+				y(1) += 2 * M_PI;
+			}
 	  MatrixXd Ht = H_.transpose();
-	  MatrixXd S = H_ * P_ * Ht + R_;
-	  MatrixXd Si = S.inverse();
 	  MatrixXd PHt = P_ * Ht;
+		MatrixXd S = H_ * PHt + R_;
+	  MatrixXd Si = S.inverse();
 	  MatrixXd K = PHt * Si; // Kalman gain
 
 	  
